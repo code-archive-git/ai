@@ -1,66 +1,12 @@
 import torch
-import torch.nn as nn
-from transformers import AutoTokenizer, AutoModel, PreTrainedModel, AutoConfig
+from transformers import AutoTokenizer,AutoConfig
+
+from CustomClassifier import CustomClassifier
 
 print(f'GPU 사용가능 여부 : {torch.cuda.is_available()}')
 print(torch.__version__)            # 뒤에 +cpu 붙어있으면 CPU 전용 빌드
 
-
-# -----------------------------------------------------------------------
-# 1단계: 커스텀 모델 클래스 만들기
-# -----------------------------------------------------------------------
-# "Backbone + 커스텀 Head"를 하나의 모델로 묶습니다.
-class CustomClassifier(PreTrainedModel):
-
-    def __init__(self, config):
-        super().__init__(config)
-        # (1) Backbone 불러오기
-        #     AutoModel 은 "헤드가 없는" 순수 backbone만 불러옵니다.
-        #     (AutoModelForSequenceClassification과 다르게, 이미 만들어진
-        #      분류 헤드가 붙어있지 않습니다 -> 우리가 직접 헤드를 붙일 것!)
-        self.backbone = AutoModel.from_config(config)
-        num_labels = getattr(config, "num_labels", 2)  # config에 설정된 num_labels 사용 (기본값 2)
-        dropout_prob = getattr(config, "classifier_dropout", 0.3)  # 드롭아웃 비율
-
-        # backbone이 출력하는 벡터의 크기(차원)를 알아냅니다.
-        # 예: distilbert는 보통 768차원 벡터를 출력합니다.
-        hidden_size = config.hidden_size
-
-        # (2) 커스텀 헤드 만들기
-        #     여기서는 "선형층 -> 활성화 함수(ReLU) -> 드롭아웃 -> 선형층"
-        #     이렇게 2개의 층을 쌓은, 조금 더 표현력 있는 헤드를 만들어봅니다.
-        #     (기본 제공 모델은 보통 선형층 1개짜리 헤드만 있습니다)
-        self.custom_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),  # 768 -> 384로 차원 축소
-            nn.ReLU(),  # 비선형성 추가
-            nn.Dropout(dropout_prob),  # 과적합 방지(무작위 30% 끄기)
-            nn.Linear(hidden_size // 2, num_labels),  # 384 -> 2 (최종 클래스 개수)
-        )
-
-        # 가중치 초기화 (PreTrainedModel 제공 함수)
-        self.post_init()
-
-    # model() 을 쓰는 순간 내부적으로 호출됨
-    def forward(self, input_ids, attention_mask=None):
-        """
-        forward()는 "입력이 들어왔을 때 모델이 어떻게 계산할지"를 정의하는 함수입니다.
-        """
-        # (1) Backbone에 입력을 넣어서 결과를 받습니다.
-        outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-
-        # outputs.last_hidden_state의 shape: (문장, 토큰, 벡터들)
-        # [cls] 는 해당 문장의 대표 내용을 담는다.
-        # 기존의 언어 생성이나 분석와 같이 단어와 단어의 의미가 필요하지만
-        # classification 같은 분류는 이 문장 자체의 의미가 필요하다.
-        # 그래서 첫 토큰인 [CLS] 의 모든 벡터를 들고오는 것!
-        print(f'shape : {outputs.last_hidden_state.shape}')
-        cls_vector = outputs.last_hidden_state[:, 0, :]
-
-        print(f'[cls] vector : {cls_vector}')
-        # (2) 우리가 만든 커스텀 헤드에 통과시켜 최종 예측값(logits)을 얻습니다.
-        logits = self.custom_head(cls_vector)  # shape: (배치크기, num_labels)
-        return logits
-
+# 1단계: 커스텀 모델 클래스 만들기 - CustomClassifier
 
 # -----------------------------------------------------------------------
 # 2단계: 토크나이저와 모델 준비하기
@@ -110,3 +56,8 @@ print("\n확률로 변환 (softmax):\n", probs)
 # 가장 확률이 높은 클래스를 예측 결과로 선택
 predictions = torch.argmax(probs, dim=-1)
 print("\n예측 클래스 (0=부정, 1=긍정):\n", predictions)
+
+# 모델 저장  - 내용 모델을 local에 저장
+save_path = "./my_custom_model"
+model.save_pretrained(save_path)
+tokenizer.save_pretrained(save_path)
